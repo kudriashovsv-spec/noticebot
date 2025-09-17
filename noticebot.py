@@ -30,13 +30,25 @@ def load_reminders():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # Преобразуем строки обратно в datetime
-            reminders = {int(k): [{"time": datetime.fromisoformat(r["time"]), "text": r["text"]} 
-                                   for r in v] 
-                         for k, v in data.items()}
+            reminders = {}
+            for k, v in data.items():
+                user_reminders = []
+                for r in v:
+                    reminder_time = datetime.fromisoformat(r["time"])
+                    reminder_text = r["text"]
+                    sent = r.get("sent", False)
+                    # Если время уже прошло, отмечаем как отправленное
+                    if reminder_time <= datetime.now():
+                        sent = True
+                    user_reminders.append({
+                        "time": reminder_time,
+                        "text": reminder_text,
+                        "sent": sent
+                    })
+                reminders[int(k)] = user_reminders
 
 
-# --- Команды /start list done help ---
+# --- Команды /start list done help clear edit---
 @dp.message(Command("start", ignore_case=True))
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -51,29 +63,149 @@ async def list_reminders(message: types.Message):
         await message.answer("У тебя пока нет напоминаний 📭")
         return
 
-    text = "📋 Твои напоминания:\n"
-    for idx, r in enumerate(reminders[user_id], start=1):
-        text += f"{idx}. {r['time']} — {r['text']}\n"
+    # Разделяем активные и выполненные
+    active = [r for r in reminders[user_id] if not r.get("sent")]
+    done = [r for r in reminders[user_id] if r.get("sent")]
 
-    await message.answer(text)
+    # Сортируем по времени
+    active.sort(key=lambda r: r["time"])
+    done.sort(key=lambda r: r["time"])
+
+    text = ""
+
+    if active:
+        text += "⏰ <b>Активные напоминания:</b>\n"
+        for idx, r in enumerate(active, start=1):
+            text += f"{idx}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}\n"
+
+    if done:
+        text += "\n✅ <b>Выполненные напоминания:</b>\n"
+        for idx, r in enumerate(done, start=1):
+            text += f"{idx}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}\n"
+
+    await message.answer(text, parse_mode="HTML")
 
 @dp.message(Command("done", ignore_case=True))
 async def done_reminder(message: types.Message):
+    user_id = message.from_user.id
+
+    if user_id not in reminders or not reminders[user_id]:
+        await message.answer("У тебя пока нет напоминаний 📭")
+        return
+
+    # Только активные
+    active = [r for r in reminders[user_id] if not r.get("sent")]
+    done = [r for r in reminders[user_id] if r.get("sent")]
+
     parts = message.text.split()
     if len(parts) < 2:
-        await message.answer("❗ Укажи номер напоминания, например: /done 1")
+        await message.answer("❗ Укажи номера активных напоминаний, например: /done 1 2")
         return
 
+    completed = []
+    for part in parts[1:]:
+        try:
+            idx = int(part) - 1
+            if idx < 0 or idx >= len(active):
+                raise IndexError
+            reminder = active[idx]
+            reminder["sent"] = True
+            completed.append(reminder["text"])
+        except (ValueError, IndexError):
+            await message.answer(f"❗ Игнорирован неверный номер: {part}")
+
+    save_reminders()
+
+    if not completed:
+        await message.answer("❗ Не было выбрано корректных напоминаний для выполнения")
+        return
+
+# --- Команда /clear ---
+@dp.message(Command("clear", ignore_case=True))
+async def clear_done_reminders(message: types.Message):
     user_id = message.from_user.id
-    idx = int(parts[1]) - 1
 
-    if user_id not in reminders or idx < 0 or idx >= len(reminders[user_id]):
-        await message.answer("❗ Напоминания с таким номером нет")
+    if user_id not in reminders or not reminders[user_id]:
+        await message.answer("У тебя пока нет напоминаний 📭")
         return
 
-    removed = reminders[user_id].pop(idx)  # удаляем напоминание из списка
-    save_reminders()  # сохраняем изменения в JSON
-    await message.answer(f"✅ Удалено: {removed['text']}")
+    before_count = len(reminders[user_id])
+    reminders[user_id] = [r for r in reminders[user_id] if not r.get("sent")]
+    removed_count = before_count - len(reminders[user_id])
+    
+    save_reminders()
+    
+    await message.answer(f"✅ Удалено {removed_count} выполненных напоминаний.")
+
+# --- Команда /edit ---
+@dp.message(Command("edit", ignore_case=True))
+async def edit_reminder(message: types.Message):
+    user_id = message.from_user.id
+
+    if user_id not in reminders or not reminders[user_id]:
+        await message.answer("У тебя пока нет напоминаний 📭")
+        return
+
+    # Только активные
+    active = [r for r in reminders[user_id] if not r.get("sent")]
+
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer(
+            "❗ Формат неверный! Используй: /edit <номер> <новое время или текст>\n"
+            "Пример: /edit 1 2025-09-17 12:00, Позвонить другу"
+        )
+        return
+
+    try:
+        idx = int(parts[1]) - 1
+        if idx < 0 or idx >= len(active):
+            raise IndexError
+    except (ValueError, IndexError):
+        await message.answer("❗ Неверный номер напоминания")
+        return
+
+    new_data = parts[2].strip()
+    if "," not in new_data:
+        await message.answer("❗ Формат неверный! Используй: ГГГГ-ММ-ДД ЧЧ:ММ, текст напоминания")
+        return
+
+    date_str, reminder_text = map(str.strip, new_data.split(",", 1))
+    try:
+        new_time = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
+    except ValueError:
+        await message.answer("❗ Неверный формат даты! Пример: 2025-09-17 12:00, Позвонить другу")
+        return
+
+    # Обновляем активное напоминание
+    reminder = active[idx]
+    reminder["time"] = new_time
+    reminder["text"] = reminder_text
+
+    save_reminders()
+
+    await message.answer(f"✅ Напоминание обновлено!\n⏰ {new_time.strftime('%Y-%m-%d %H:%M')} — {reminder_text}")
+
+    
+    # Обновляем списки
+    active = [r for r in reminders[user_id] if not r.get("sent")]
+    done = [r for r in reminders[user_id] if r.get("sent")]
+
+    text = ""
+    if active:
+        text += "⏰ <b>Активные напоминания:</b>\n"
+        for i, r in enumerate(active, start=1):
+            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}\n"
+
+    if done:
+        text += "\n✅ <b>Выполненные напоминания:</b>\n"
+        for i, r in enumerate(done, start=1):
+            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}\n"
+
+    await message.answer(
+        f"✅ Выполнены напоминания:\n- " + "\n- ".join(completed) + f"\n\n{text}",
+        parse_mode="HTML"
+    )
 
 @dp.message(Command("help", ignore_case=True))
 async def cmd_help(message: types.Message):
@@ -90,23 +222,38 @@ async def cmd_help(message: types.Message):
 @dp.message(~Command("start"), ~Command("list"), ~Command("done"), ~Command("help"))
 async def add_reminder(message: types.Message):
     user_id = message.from_user.id
+    text = message.text.strip()  # убираем лишние пробелы
+
+    if "," not in text:
+        await message.answer(
+            "❗ Формат неверный! Используй: ГГГГ-ММ-ДД ЧЧ:ММ, текст напоминания"
+        )
+        return
+
+    date_str, reminder_text = map(str.strip, text.split(",", 1))  # чистим обе части
+
     try:
-        text = message.text
-        date_str, reminder_text = text.split(",", 1)
-        reminder_time = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M")
-
-        if user_id not in reminders:
-            reminders[user_id] = []
-        reminders[user_id].append({
-            "time": reminder_time,
-            "text": reminder_text.strip()
-        })
-        save_reminders()  # <-- вызываем после добавления
-
-        await message.answer(f"Напоминание сохранено: {reminder_text.strip()} на {reminder_time}")
-
+        reminder_time = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
     except ValueError:
-        await message.answer("Неверный формат! Используйте ГГГГ-ММ-ДД ЧЧ:ММ, текст напоминания")
+        await message.answer(
+            "❗ Неверный формат даты! Пример: 2025-09-16 18:00, Позвонить маме"
+        )
+        return
+
+    if user_id not in reminders:
+        reminders[user_id] = []
+
+    reminders[user_id].append({
+        "time": reminder_time,
+        "text": reminder_text
+    })
+    save_reminders()  # сохраняем изменения
+
+    await message.answer(
+        f"✅ Напоминание добавлено!\n"
+        f"⏰ Время: {reminder_time.strftime('%Y-%m-%d %H:%M')}\n"
+        f"📝 Текст: {reminder_text}"
+    )
 
 
 
