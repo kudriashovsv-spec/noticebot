@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from datetime import datetime
+from datetime import datetime, timedelta
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -19,33 +19,36 @@ reminders = {}
 DATA_FILE = "reminders.json"
 
 def save_reminders():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        # Сериализуем datetime в строку
-        json.dump({str(k): [{"time": r["time"].isoformat(), "text": r["text"]} 
-                             for r in v] 
-                   for k, v in reminders.items()}, f, ensure_ascii=False, indent=4)
+    data = {}
+    for user_id, user_reminders in reminders.items():
+        data[user_id] = []
+        for r in user_reminders:
+            data[user_id].append({
+                "time": r["time"].strftime("%Y-%m-%d %H:%M"),
+                "text": r["text"],
+                "repeat": r.get("repeat"),  # добавили повторение
+                "sent": r["sent"]
+            })
+    with open("reminders.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 def load_reminders():
     global reminders
-    if os.path.exists(DATA_FILE):
+    try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             reminders = {}
-            for k, v in data.items():
-                user_reminders = []
-                for r in v:
-                    reminder_time = datetime.fromisoformat(r["time"])
-                    reminder_text = r["text"]
-                    sent = r.get("sent", False)
-                    # Если время уже прошло, отмечаем как отправленное
-                    if reminder_time <= datetime.now():
-                        sent = True
-                    user_reminders.append({
-                        "time": reminder_time,
-                        "text": reminder_text,
-                        "sent": sent
+            for user_id, user_reminders in data.items():
+                reminders[user_id] = []
+                for r in user_reminders:
+                    reminders[user_id].append({
+                        "time": datetime.fromisoformat(r["time"]),  # ✅ исправлено
+                        "text": r["text"],
+                        "repeat": r.get("repeat"),
+                        "sent": r.get("sent", False)
                     })
-                reminders[int(k)] = user_reminders
+    except FileNotFoundError:
+        reminders = {}
 
 
 # --- Команды /start list done help clear edit---
@@ -63,11 +66,9 @@ async def list_reminders(message: types.Message):
         await message.answer("У тебя пока нет напоминаний 📭")
         return
 
-    # Разделяем активные и выполненные
     active = [r for r in reminders[user_id] if not r.get("sent")]
     done = [r for r in reminders[user_id] if r.get("sent")]
 
-    # Сортируем по времени
     active.sort(key=lambda r: r["time"])
     done.sort(key=lambda r: r["time"])
 
@@ -75,13 +76,19 @@ async def list_reminders(message: types.Message):
 
     if active:
         text += "⏰ <b>Активные напоминания:</b>\n"
-        for idx, r in enumerate(active, start=1):
-            text += f"{idx}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}\n"
+        for i, r in enumerate(active, start=1):
+            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}"
+            if r.get("repeat"):
+                text += f" 🔁 {r['repeat']}"
+            text += "\n"
 
     if done:
         text += "\n✅ <b>Выполненные напоминания:</b>\n"
-        for idx, r in enumerate(done, start=1):
-            text += f"{idx}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}\n"
+        for i, r in enumerate(done, start=1):
+            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}"
+            if r.get("repeat"):
+                text += f" 🔁 {r['repeat']}"
+            text += "\n"
 
     await message.answer(text, parse_mode="HTML")
 
@@ -93,9 +100,7 @@ async def done_reminder(message: types.Message):
         await message.answer("У тебя пока нет напоминаний 📭")
         return
 
-    # Только активные
     active = [r for r in reminders[user_id] if not r.get("sent")]
-    done = [r for r in reminders[user_id] if r.get("sent")]
 
     parts = message.text.split()
     if len(parts) < 2:
@@ -116,9 +121,10 @@ async def done_reminder(message: types.Message):
 
     save_reminders()
 
-    if not completed:
+    if completed:
+        await message.answer("✅ Выполнены напоминания:\n- " + "\n- ".join(completed))
+    else:
         await message.answer("❗ Не было выбрано корректных напоминаний для выполнения")
-        return
 
 # --- Команда /clear ---
 @dp.message(Command("clear", ignore_case=True))
@@ -195,43 +201,65 @@ async def edit_reminder(message: types.Message):
     if active:
         text += "⏰ <b>Активные напоминания:</b>\n"
         for i, r in enumerate(active, start=1):
-            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}\n"
+            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}"
+            if r.get("repeat"):
+                text += f" 🔁 {r['repeat']}"
+            text += "\n"
 
     if done:
         text += "\n✅ <b>Выполненные напоминания:</b>\n"
         for i, r in enumerate(done, start=1):
-            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}\n"
+            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}"
+            if r.get("repeat"):
+                text += f" 🔁 {r['repeat']}"
+            text += "\n"
 
-    await message.answer(
-        f"✅ Выполнены напоминания:\n- " + "\n- ".join(completed) + f"\n\n{text}",
-        parse_mode="HTML"
-    )
+    await message.answer(text, parse_mode="HTML")
 
 @dp.message(Command("help", ignore_case=True))
 async def cmd_help(message: types.Message):
     await message.answer(
-    "<b>Список команд:</b>\n"
-    "<code>/start</code> - начать работу с ботом\n"
-    "<code>/list</code> - показать все напоминания\n"
-    "<code>/done</code> - отметить напоминание как выполненное\n"
-    "<code>/help</code> - показать список команд",
-    parse_mode="HTML"
+        "📖 <b>Список команд:</b>\n"
+        "👉 <code>/start</code> — начать работу с ботом\n"
+        "👉 <code>/list</code> — показать все напоминания\n"
+        "👉 <code>/done</code> — отметить напоминание как ✅ выполненное\n"
+        "👉 <code>/clear</code> — удалить 🗑️ все выполненные напоминания\n"
+        "👉 <code>/edit</code> — ✏️ изменить напоминание\n"
+        "👉 <code>/help</code> — показать список команд\n\n"
+        "⏰ <b>Добавление напоминания:</b>\n"
+        "Просто напиши в чат:\n"
+        "<code>2025-09-20 10:00, Сделать зарядку</code>\n\n"
+        "🔁 <b>С повторением:</b>\n"
+        "<code>2025-09-20 10:00, Сделать зарядку, daily</code>\n"
+        "Варианты повторения: <code>daily</code>, <code>weekly</code>, <code>monthly</code>",
+        parse_mode="HTML"
     )
 
 # --- Добавление напоминания ---
-@dp.message(~Command("start"), ~Command("list"), ~Command("done"), ~Command("help"))
+@dp.message(~Command("start"), ~Command("list"), ~Command("done"), ~Command("help"), ~Command("clear"), ~Command("edit"))
 async def add_reminder(message: types.Message):
     user_id = message.from_user.id
     text = message.text.strip()  # убираем лишние пробелы
 
     if "," not in text:
         await message.answer(
-            "❗ Формат неверный! Используй: ГГГГ-ММ-ДД ЧЧ:ММ, текст напоминания"
+            "❗ Формат неверный! Используй: ГГГГ-ММ-ДД ЧЧ:ММ, текст напоминания [, повторение]"
         )
         return
 
-    date_str, reminder_text = map(str.strip, text.split(",", 1))  # чистим обе части
+    # Разбиваем строку
+    parts = [p.strip() for p in text.split(",")]
+    date_str = parts[0]  # первая часть — дата
+    reminder_text = parts[1] if len(parts) > 1 else ""
+    repeat = None  # по умолчанию без повторения
 
+    # Проверяем, указал ли пользователь повторение
+    if len(parts) > 2:
+        repeat_str = parts[2].lower()
+        if repeat_str in ["daily", "weekly", "monthly"]:
+            repeat = repeat_str
+
+    # Проверяем корректность даты
     try:
         reminder_time = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
     except ValueError:
@@ -245,30 +273,50 @@ async def add_reminder(message: types.Message):
 
     reminders[user_id].append({
         "time": reminder_time,
-        "text": reminder_text
+        "text": reminder_text,
+        "repeat": repeat,
+        "sent": False
     })
     save_reminders()  # сохраняем изменения
 
-    await message.answer(
+    reply_text = (
         f"✅ Напоминание добавлено!\n"
         f"⏰ Время: {reminder_time.strftime('%Y-%m-%d %H:%M')}\n"
         f"📝 Текст: {reminder_text}"
     )
+    if repeat:
+        reply_text += f"\n🔁 Повторение: {repeat}"
 
-
+    await message.answer(reply_text)
 
 
 # --- Фоновая проверка напоминаний ---
 async def reminder_checker():
-    while True:  # бесконечный цикл
-        now = datetime.now()  # текущее время
+    while True:
+        now = datetime.now()
         for user_id, user_reminders in reminders.items():
             for reminder in user_reminders:
-                # если время напоминания пришло или прошло
                 if reminder["time"] <= now and not reminder.get("sent"):
                     await bot.send_message(user_id, f"Напоминание: {reminder['text']}")
-                    reminder["sent"] = True  # отмечаем, что отправили
-        await asyncio.sleep(30)  # проверяем каждые 30 секунд
+                    reminder["sent"] = True
+
+                    # --- создаём повторение ---
+                    repeat = reminder.get("repeat")
+                    if repeat == "daily":
+                        reminder["time"] += timedelta(days=1)
+                        reminder["sent"] = False
+                    elif repeat == "weekly":
+                        reminder["time"] += timedelta(weeks=1)
+                        reminder["sent"] = False
+                    elif repeat == "monthly":
+                        # Для простоты добавим 30 дней
+                        reminder["time"] += timedelta(days=30)
+                        reminder["sent"] = False
+
+                    save_reminders()
+
+        await asyncio.sleep(30)  # проверка каждые 30 секунд
+
 
 # --- Главная функция ---
 async def main():
