@@ -27,7 +27,7 @@ def save_reminders():
         data[user_id] = []
         for r in user_reminders:
             data[user_id].append({
-                "time": r["time"].strftime("%Y-%m-%d %H:%M"),
+                "time": r["time"].strftime("%d.%m.%Y %H:%M"),
                 "text": r["text"],
                 "repeat": r.get("repeat"),  # добавили повторение
                 "sent": r["sent"]
@@ -45,7 +45,7 @@ def load_reminders():
                 reminders[user_id] = []
                 for r in user_reminders:
                     reminders[user_id].append({
-                        "time": datetime.fromisoformat(r["time"]),  # ✅ исправлено
+                        "time": datetime.strptime(r["time"], "%d.%m.%Y %H:%M"),  # ✅ исправлено
                         "text": r["text"],
                         "repeat": r.get("repeat"),
                         "sent": r.get("sent", False)
@@ -58,8 +58,8 @@ def load_reminders():
 @dp.message(Command("start", ignore_case=True))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "Привет! Введи дату и время напоминания в формате ГГГГ-ММ-ДД ЧЧ:ММ, текст напоминания.\n"
-        "Пример: 2025-09-09 15:00, Позвонить маме")
+        "Привет! Введи дату и время напоминания в формате ДД.MM.ГГГГ ЧЧ:ММ, текст напоминания.\n"
+        "Пример: 18.09.2025 15:00, Позвонить маме")
 
 @dp.message(Command("list", ignore_case=True))
 async def list_reminders(message: types.Message):
@@ -83,7 +83,7 @@ async def list_reminders(message: types.Message):
     # ----------------------------
     if active:
         buttons = [
-            [InlineKeyboardButton(text=f"✅ {r['text']}", callback_data=f"done_{i}")]
+            [InlineKeyboardButton(text=f"✅ {r['time'].strftime('%d.%m.%Y %H:%M')} — {r['text']}", callback_data=f"done_{i}")]
             for i, r in enumerate(active)  # start=0 по умолчанию
         ]
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -103,7 +103,7 @@ async def list_reminders(message: types.Message):
     if done:
         text_done = "✅ <b>Выполненные напоминания:</b>\n"
         for i, r in enumerate(done, start=1):
-            text_done += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}"
+            text_done += f"{i}. {r['time'].strftime('%d.%m.%Y %H:%M')} — {r['text']}"
             if r.get("repeat"):
                 text_done += f" 🔁 {r['repeat']}"
             text_done += "\n"
@@ -195,7 +195,7 @@ async def edit_reminder(message: types.Message):
 
     date_str, reminder_text = map(str.strip, new_data.split(",", 1))
     try:
-        new_time = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
+        new_time = datetime.strptime(date_str, "%d.%m.%Y %H:%M")
     except ValueError:
         await message.answer("❗ Неверный формат даты! Пример: 2025-09-17 12:00, Позвонить другу")
         return
@@ -207,7 +207,7 @@ async def edit_reminder(message: types.Message):
 
     save_reminders()
 
-    await message.answer(f"✅ Напоминание обновлено!\n⏰ {new_time.strftime('%Y-%m-%d %H:%M')} — {reminder_text}")
+    await message.answer(f"✅ Напоминание обновлено!\n⏰ {new_time.strftime('%d.%m.%Y %H:%M')} — {reminder_text}")
 
     
     # Обновляем списки
@@ -218,7 +218,7 @@ async def edit_reminder(message: types.Message):
     if active:
         text += "⏰ <b>Активные напоминания:</b>\n"
         for i, r in enumerate(active, start=1):
-            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}"
+            text += f"{i}. {r['time'].strftime('%d.%m.%Y %H:%M')} — {r['text']}"
             if r.get("repeat"):
                 text += f" 🔁 {r['repeat']}"
             text += "\n"
@@ -226,7 +226,7 @@ async def edit_reminder(message: types.Message):
     if done:
         text += "\n✅ <b>Выполненные напоминания:</b>\n"
         for i, r in enumerate(done, start=1):
-            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}"
+            text += f"{i}. {r['time'].strftime('%d.%m.%Y %H:%M')} — {r['text']}"
             if r.get("repeat"):
                 text += f" 🔁 {r['repeat']}"
             text += "\n"
@@ -245,9 +245,9 @@ async def cmd_help(message: types.Message):
         "👉 <code>/help</code> — показать список команд\n\n"
         "⏰ <b>Добавление напоминания:</b>\n"
         "Просто напиши в чат:\n"
-        "<code>2025-09-20 10:00, Сделать зарядку</code>\n\n"
+        "<code>18.09.2025 10:00, Сделать зарядку</code>\n\n"
         "🔁 <b>С повторением:</b>\n"
-        "<code>2025-09-20 10:00, Сделать зарядку, daily</code>\n"
+        "<code>18.09.2025 10:00, Сделать зарядку, daily</code>\n"
         "Варианты повторения: <code>daily</code>, <code>weekly</code>, <code>monthly</code>",
         parse_mode="HTML"
     )
@@ -278,7 +278,7 @@ async def add_reminder(message: types.Message):
 
     # Проверяем корректность даты
     try:
-        reminder_time = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
+        reminder_time = datetime.strptime(date_str, "%d.%m.%Y %H:%M")
     except ValueError:
         await message.answer(
             "❗ Неверный формат даты! Пример: 2025-09-16 18:00, Позвонить маме"
@@ -298,7 +298,7 @@ async def add_reminder(message: types.Message):
 
     reply_text = (
         f"✅ Напоминание добавлено!\n"
-        f"⏰ Время: {reminder_time.strftime('%Y-%m-%d %H:%M')}\n"
+        f"⏰ Время: {reminder_time.strftime('%d.%m.%Y %H:%M')}\n"
         f"📝 Текст: {reminder_text}"
     )
     if repeat:
@@ -314,7 +314,7 @@ async def reminder_checker():
         for user_id, user_reminders in reminders.items():
             for reminder in user_reminders:
                 if reminder["time"] <= now and not reminder.get("sent"):
-                    await bot.send_message(user_id, f"Напоминание: {reminder['text']}")
+                    await bot.send_message(user_id, f"⏰ {reminder['time'].strftime('%d.%m.%Y %H:%M')} — {reminder['text']}")
                     reminder["sent"] = True
 
                     # --- создаём повторение ---
@@ -359,7 +359,7 @@ async def process_done_callback(callback_query: types.CallbackQuery):
     active = [r for r in reminders[user_id] if not r.get("sent")]
     if active:
         buttons = [
-            [InlineKeyboardButton(text=f"✅ {r['text']}", callback_data=f"done_{i}")]
+            [InlineKeyboardButton(text=f"✅ {r['time'].strftime('%d.%m.%Y %H:%M')} — {r['text']}", callback_data=f"done_{i}")]
             for i, r in enumerate(active)
         ]
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
