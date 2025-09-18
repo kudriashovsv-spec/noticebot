@@ -3,9 +3,11 @@ import json
 import os
 
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from datetime import datetime, timedelta
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -62,35 +64,47 @@ async def cmd_start(message: types.Message):
 async def list_reminders(message: types.Message):
     user_id = message.from_user.id
 
+    # Проверяем, есть ли у пользователя напоминания
     if user_id not in reminders or not reminders[user_id]:
         await message.answer("У тебя пока нет напоминаний 📭")
         return
 
+    # Разделяем на активные и выполненные напоминания
     active = [r for r in reminders[user_id] if not r.get("sent")]
     done = [r for r in reminders[user_id] if r.get("sent")]
 
+    # Сортируем по времени
     active.sort(key=lambda r: r["time"])
     done.sort(key=lambda r: r["time"])
 
-    text = ""
-
+    # ----------------------------
+    # 1️⃣ Работаем с активными напоминаниями
+    # ----------------------------
     if active:
-        text += "⏰ <b>Активные напоминания:</b>\n"
+        # Создаём клавиатуру для кнопок
+        keyboard = InlineKeyboardMarkup()
         for i, r in enumerate(active, start=1):
-            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}"
-            if r.get("repeat"):
-                text += f" 🔁 {r['repeat']}"
-            text += "\n"
+            # Каждое напоминание получает кнопку "✅ Выполнено"
+            keyboard.add(
+                InlineKeyboardButton(
+                    text=f"✅ {r['text']}",        # текст на кнопке — само напоминание
+                    callback_data=f"done_{i-1}"   # индекс в списке активных
+                )
+            )
+        # Отправляем сообщение с кнопками
+        await message.answer("⏰ <b>Активные напоминания:</b>", reply_markup=keyboard, parse_mode="HTML")
 
+    # ----------------------------
+    # 2️⃣ Работаем с выполненными напоминаниями
+    # ----------------------------
     if done:
-        text += "\n✅ <b>Выполненные напоминания:</b>\n"
+        text_done = "✅ <b>Выполненные напоминания:</b>\n"
         for i, r in enumerate(done, start=1):
-            text += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}"
+            text_done += f"{i}. {r['time'].strftime('%Y-%m-%d %H:%M')} — {r['text']}"
             if r.get("repeat"):
-                text += f" 🔁 {r['repeat']}"
-            text += "\n"
-
-    await message.answer(text, parse_mode="HTML")
+                text_done += f" 🔁 {r['repeat']}"
+            text_done += "\n"
+        await message.answer(text_done, parse_mode="HTML")
 
 @dp.message(Command("done", ignore_case=True))
 async def done_reminder(message: types.Message):
@@ -316,6 +330,51 @@ async def reminder_checker():
                     save_reminders()
 
         await asyncio.sleep(30)  # проверка каждые 30 секунд
+
+# === НОВЫЙ ОБРАБОТЧИК INLINE КНОПОК ===
+@dp.callback_query(lambda c: c.data and c.data.startswith("done_"))
+async def process_done_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    index = int(callback_query.data.split("_")[1])  # получаем индекс напоминания
+
+    # Формируем список активных напоминаний
+    active = [r for r in reminders[user_id] if not r.get("sent")]
+
+    if user_id not in reminders or index >= len(active):
+        await callback_query.answer("❗ Напоминание не найдено", show_alert=True)
+        return
+
+    # Отмечаем как выполненное
+    reminder = active[index]
+    reminder["sent"] = True
+    save_reminders()
+
+    # Формируем новую клавиатуру без выполненного напоминания
+    active = [r for r in reminders[user_id] if not r.get("sent")]
+    keyboard = InlineKeyboardMarkup()
+    for i, r in enumerate(active, start=1):
+        keyboard.add(
+            InlineKeyboardButton(
+                text=f"✅ {r['text']}",
+                callback_data=f"done_{i-1}"
+            )
+        )
+
+    # Если есть активные напоминания, обновляем сообщение
+    if active:
+        await callback_query.message.edit_text(
+            "⏰ <b>Активные напоминания:</b>",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+    else:
+        # Если активных больше нет, убираем клавиатуру
+        await callback_query.message.edit_text(
+            "Все напоминания выполнены! ✅",
+            reply_markup=None
+        )
+
+    await callback_query.answer("✅ Напоминание отмечено как выполненное")
 
 
 # --- Главная функция ---
