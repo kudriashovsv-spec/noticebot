@@ -1,5 +1,4 @@
 import asyncio
-from email.mime import message
 import json
 import os
 
@@ -59,7 +58,7 @@ def load_reminders():
 async def cmd_start(message: types.Message):
     await message.answer(
         "Привет! Введи дату и время напоминания в формате ДД.MM.ГГГГ ЧЧ:ММ, текст напоминания.\n"
-        "Пример: 18.09.2025 15:00, Позвонить маме")
+        "Пример: 18.09.2025 15:00 Позвонить маме")
 
 @dp.message(Command("list", ignore_case=True))
 async def list_reminders(message: types.Message):
@@ -169,15 +168,20 @@ async def edit_reminder(message: types.Message):
         await message.answer("У тебя пока нет напоминаний 📭")
         return
 
-    # Только активные
     active = [r for r in reminders[user_id] if not r.get("sent")]
 
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3:
-        await message.answer(
-            "❗ Формат неверный! Используй: /edit <номер> <новое время или текст>\n"
-            "Пример: /edit 1 2025-09-17 12:00, Позвонить другу"
-        )
+    if not active:
+        await message.answer("У тебя пока нет активных напоминаний ⏰")
+        return
+
+    parts = message.text.split(maxsplit=3)
+    if len(parts) < 4:
+        # Выводим список активных напоминаний для удобства
+        text = "⏰ <b>Активные напоминания:</b>\n"
+        for i, r in enumerate(active, start=1):
+            text += f"{i}. {r['time'].strftime('%d.%m.%Y %H:%M')} — {r['text']}\n"
+        text += "\n❗ Используй: /edit <номер> ДД.MM.ГГГГ ЧЧ:ММ Новый текст"
+        await message.answer(text, parse_mode="HTML")
         return
 
     try:
@@ -188,26 +192,23 @@ async def edit_reminder(message: types.Message):
         await message.answer("❗ Неверный номер напоминания")
         return
 
-    new_data = parts[2].strip()
-    if "," not in new_data:
-        await message.answer("❗ Формат неверный! Используй: ГГГГ-ММ-ДД ЧЧ:ММ, текст напоминания")
-        return
+    date_str = parts[2]
+    time_str = parts[3].split()[0]
+    reminder_text = " ".join(parts[3].split()[1:])
 
-    date_str, reminder_text = map(str.strip, new_data.split(",", 1))
     try:
-        new_time = datetime.strptime(date_str, "%d.%m.%Y %H:%M")
+        new_time = datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M")
     except ValueError:
-        await message.answer("❗ Неверный формат даты! Пример: 2025-09-17 12:00, Позвонить другу")
+        await message.answer("❗ Неверный формат даты! Пример: 18.09.2025 12:00 Сделать звонок")
         return
 
-    # Обновляем активное напоминание
     reminder = active[idx]
     reminder["time"] = new_time
     reminder["text"] = reminder_text
-
     save_reminders()
 
     await message.answer(f"✅ Напоминание обновлено!\n⏰ {new_time.strftime('%d.%m.%Y %H:%M')} — {reminder_text}")
+
 
     
     # Обновляем списки
@@ -245,9 +246,9 @@ async def cmd_help(message: types.Message):
         "👉 <code>/help</code> — показать список команд\n\n"
         "⏰ <b>Добавление напоминания:</b>\n"
         "Просто напиши в чат:\n"
-        "<code>18.09.2025 10:00, Сделать зарядку</code>\n\n"
+        "<code>18.09.2025 10:00 Сделать зарядку</code>\n\n"
         "🔁 <b>С повторением:</b>\n"
-        "<code>18.09.2025 10:00, Сделать зарядку, daily</code>\n"
+        "<code>18.09.2025 10:00 Сделать зарядку daily</code>\n"
         "Варианты повторения: <code>daily</code>, <code>weekly</code>, <code>monthly</code>",
         parse_mode="HTML"
     )
@@ -256,33 +257,29 @@ async def cmd_help(message: types.Message):
 @dp.message(~Command("start"), ~Command("list"), ~Command("done"), ~Command("help"), ~Command("clear"), ~Command("edit"))
 async def add_reminder(message: types.Message):
     user_id = message.from_user.id
-    text = message.text.strip()  # убираем лишние пробелы
+    text = message.text.strip().split()  # разбиваем по пробелам
 
-    if "," not in text:
+    if len(text) < 3:
         await message.answer(
-            "❗ Формат неверный! Используй: ГГГГ-ММ-ДД ЧЧ:ММ, текст напоминания [, повторение]"
+            "❗ Формат неверный! Используй: ДД.MM.ГГГГ ЧЧ:ММ Текст напоминания [repeat]\n"
+            "Пример: 18.09.2025 10:00 Сделать зарядку daily"
         )
         return
 
-    # Разбиваем строку
-    parts = [p.strip() for p in text.split(",")]
-    date_str = parts[0]  # первая часть — дата
-    reminder_text = parts[1] if len(parts) > 1 else ""
-    repeat = None  # по умолчанию без повторения
+    date_str = text[0]
+    time_str = text[1]
+    reminder_text = " ".join(text[2:])  # всё остальное — текст
 
-    # Проверяем, указал ли пользователь повторение
-    if len(parts) > 2:
-        repeat_str = parts[2].lower()
-        if repeat_str in ["daily", "weekly", "monthly"]:
-            repeat = repeat_str
+    repeat = None
+    # Если в конце написано daily/weekly/monthly
+    if reminder_text.split()[-1].lower() in ["daily", "weekly", "monthly"]:
+        repeat = reminder_text.split()[-1].lower()
+        reminder_text = " ".join(reminder_text.split()[:-1])
 
-    # Проверяем корректность даты
     try:
-        reminder_time = datetime.strptime(date_str, "%d.%m.%Y %H:%M")
+        reminder_time = datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M")
     except ValueError:
-        await message.answer(
-            "❗ Неверный формат даты! Пример: 2025-09-16 18:00, Позвонить маме"
-        )
+        await message.answer("❗ Неверный формат даты! Пример: 18.09.2025 10:00 Сделать зарядку")
         return
 
     if user_id not in reminders:
@@ -294,7 +291,7 @@ async def add_reminder(message: types.Message):
         "repeat": repeat,
         "sent": False
     })
-    save_reminders()  # сохраняем изменения
+    save_reminders()
 
     reply_text = (
         f"✅ Напоминание добавлено!\n"
