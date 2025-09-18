@@ -1,4 +1,5 @@
 import asyncio
+from email.mime import message
 import json
 import os
 
@@ -82,17 +83,19 @@ async def list_reminders(message: types.Message):
     # ----------------------------
     if active:
         # Создаём клавиатуру для кнопок
-        keyboard = InlineKeyboardMarkup()
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[])
         for i, r in enumerate(active, start=1):
-            # Каждое напоминание получает кнопку "✅ Выполнено"
             keyboard.add(
                 InlineKeyboardButton(
-                    text=f"✅ {r['text']}",        # текст на кнопке — само напоминание
-                    callback_data=f"done_{i-1}"   # индекс в списке активных
+                    text=f"✅ {r['text']}",
+                    callback_data=f"done_{i-1}"
                 )
             )
-        # Отправляем сообщение с кнопками
+        # Отправляем одно сообщение с клавиатурой
         await message.answer("⏰ <b>Активные напоминания:</b>", reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await message.answer("У тебя пока нет активных напоминаний ⏰")
+
 
     # ----------------------------
     # 2️⃣ Работаем с выполненными напоминаниями
@@ -335,23 +338,25 @@ async def reminder_checker():
 @dp.callback_query(lambda c: c.data and c.data.startswith("done_"))
 async def process_done_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    index = int(callback_query.data.split("_")[1])  # получаем индекс напоминания
 
-    # Формируем список активных напоминаний
-    active = [r for r in reminders[user_id] if not r.get("sent")]
-
-    if user_id not in reminders or index >= len(active):
+    if user_id not in reminders:
         await callback_query.answer("❗ Напоминание не найдено", show_alert=True)
         return
 
-    # Отмечаем как выполненное
+    active = [r for r in reminders[user_id] if not r.get("sent")]
+    index = int(callback_query.data.split("_")[1])
+
+    if index >= len(active):
+        await callback_query.answer("❗ Напоминание не найдено", show_alert=True)
+        return
+
     reminder = active[index]
     reminder["sent"] = True
     save_reminders()
 
     # Формируем новую клавиатуру без выполненного напоминания
     active = [r for r in reminders[user_id] if not r.get("sent")]
-    keyboard = InlineKeyboardMarkup()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     for i, r in enumerate(active, start=1):
         keyboard.add(
             InlineKeyboardButton(
