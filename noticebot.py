@@ -82,17 +82,17 @@ async def list_reminders(message: types.Message):
     # 1️⃣ Работаем с активными напоминаниями
     # ----------------------------
     if active:
-        # Создаём клавиатуру для кнопок
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-        for i, r in enumerate(active, start=1):
-            keyboard.add(
-                InlineKeyboardButton(
-                    text=f"✅ {r['text']}",
-                    callback_data=f"done_{i-1}"
-                )
-            )
-        # Отправляем одно сообщение с клавиатурой
-        await message.answer("⏰ <b>Активные напоминания:</b>", reply_markup=keyboard, parse_mode="HTML")
+        buttons = [
+            [InlineKeyboardButton(text=f"✅ {r['text']}", callback_data=f"done_{i}")]
+            for i, r in enumerate(active)  # start=0 по умолчанию
+        ]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+        await message.answer(
+            "⏰ <b>Активные напоминания:</b>",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
     else:
         await message.answer("У тебя пока нет активных напоминаний ⏰")
 
@@ -344,42 +344,39 @@ async def process_done_callback(callback_query: types.CallbackQuery):
         return
 
     active = [r for r in reminders[user_id] if not r.get("sent")]
-    index = int(callback_query.data.split("_")[1])
+    index = int(callback_query.data.split("_")[1])  # индекс совпадает с enumerate(active)
 
     if index >= len(active):
         await callback_query.answer("❗ Напоминание не найдено", show_alert=True)
         return
 
+    # Отмечаем как выполненное
     reminder = active[index]
     reminder["sent"] = True
     save_reminders()
 
     # Формируем новую клавиатуру без выполненного напоминания
     active = [r for r in reminders[user_id] if not r.get("sent")]
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-    for i, r in enumerate(active, start=1):
-        keyboard.add(
-            InlineKeyboardButton(
-                text=f"✅ {r['text']}",
-                callback_data=f"done_{i-1}"
-            )
-        )
-
-    # Если есть активные напоминания, обновляем сообщение
     if active:
+        buttons = [
+            [InlineKeyboardButton(text=f"✅ {r['text']}", callback_data=f"done_{i}")]
+            for i, r in enumerate(active)
+        ]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
         await callback_query.message.edit_text(
             "⏰ <b>Активные напоминания:</b>",
             reply_markup=keyboard,
             parse_mode="HTML"
         )
     else:
-        # Если активных больше нет, убираем клавиатуру
         await callback_query.message.edit_text(
             "Все напоминания выполнены! ✅",
             reply_markup=None
         )
 
     await callback_query.answer("✅ Напоминание отмечено как выполненное")
+
 
 
 # --- Главная функция ---
